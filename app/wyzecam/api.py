@@ -1,20 +1,21 @@
+import base64
 import hmac
 import json
 import time
 import urllib.parse
 import uuid
-from hashlib import md5
+from hashlib import md5, sha256
 from os import environ, getenv
 from typing import Any, Optional
+from aws_request_signer import AwsRequestSigner
 
 import requests
 from wyzecam.api_models import WyzeAccount, WyzeCamera, WyzeCredential
 
-IOS_VERSION = getenv("IOS_VERSION")
-APP_VERSION = getenv("APP_VERSION")
-SCALE_USER_AGENT = f"Wyze/{APP_VERSION} (iPhone; iOS {IOS_VERSION}; Scale/3.00)"
-AUTH_API = "https://auth-prod.api.wyze.com"
-WYZE_API = "https://api.wyzecam.com/app"
+APP_VERSION = getenv("APP_VERSION") or "2.0.1.20"
+SCALE_USER_AGENT = f"Owl/20 CFNetwork/1408.0.4 Darwin/22.5.0"
+AUTH_API = "https://prod.mobile.roku.com"
+WYZE_API = "https://api.wyzeiot.com/app"
 SC_SV = {
     "default": {
         "sc": "9f275790cab94a72bd206c8876429f3c",
@@ -33,7 +34,6 @@ SC_SV = {
 
 class AccessTokenError(Exception):
     pass
-
 
 def login(
     email: str,
@@ -61,25 +61,54 @@ def login(
               [get_camera_list()][wyzecam.api.get_camera_list].
     """
     phone_id = phone_id or str(uuid.uuid4())
-    headers = get_headers(phone_id)
-    headers["content-type"] = "application/json"
+    # headers = get_headers(phone_id)
+    headers = {}
+    headers["content-type"] = "application/x-www-form-urlencoded"
+    headers["app"] = "harold"
+    base_url = AUTH_API
 
-    payload = sort_dict(
-        {"email": email.strip(), "password": triplemd5(password), **(mfa or {})}
+    # authroize with AWS Cognito first
+    aws_cred = requests.post(
+        "https://cognito-identity.us-east-1.amazonaws.com/",
+        json={'IdentityId': 'us-east-1:d63bc03f-a8a7-4c03-96b3-295afaee28c3'},
+        headers={
+            "X-Amz-Target": "AWSCognitoIdentityService.GetCredentialsForIdentity",
+            "Content-Type": "application/x-amz-json-1.1"
+        }
+    ).json()['Credentials']
+    AWS_ACCESS_KEY_ID = aws_cred['AccessKeyId']
+    AWS_SECRET_ACCESS_KEY = aws_cred['SecretKey']
+    AWS_SESSION_TOKEN = aws_cred['SessionToken']
+
+    # Create a request signer instance.
+    request_signer = AwsRequestSigner(
+        "us-east-1", AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, "execute-api",
+        session_token=AWS_SESSION_TOKEN
     )
-    api_version = "old"
-    if getenv("API_ID") and getenv("API_KEY"):
-        api_version = "api"
-    elif getenv("v3"):
-        api_version = "v3"
-        headers["appid"] = "umgm_78ae6013d158c4a5"
-        headers["signature2"] = sign_msg("v3", payload)
 
-    base_url = f"{AUTH_API}/{api_version}" if api_version in {"api", "v3"} else AUTH_API
-    resp = requests.post(f"{base_url}/user/login", data=payload, headers=headers)
+    payload = {
+            "email": email.strip(),
+            "password": base64.b64encode(password.encode('ascii')).decode('ascii'),
+            "isBase64Password": True
+        }
+
+    payload_str = json.dumps(payload)
+    print(payload_str)
+
+    headers.update(
+        request_signer.sign_with_headers(
+            "POST",
+            f"{base_url}/iot/user/login",
+            headers=headers,
+            content_hash=sha256(payload_str.encode('ascii')).hexdigest()
+        )
+    )
+
+    resp = requests.post(f"{base_url}/iot/user/login", data=payload_str, headers=headers)
+    print(resp.json())
     resp.raise_for_status()
 
-    return WyzeCredential.parse_obj(dict(resp.json(), phone_id=phone_id))
+    return WyzeCredential.parse_obj(dict(resp.json()['data']['partnerAccess'], phone_id=phone_id))
 
 
 def send_sms_code(auth_info: WyzeCredential, phone: str = "Primary") -> str:
@@ -176,7 +205,7 @@ def get_user_info(auth_info: WyzeCredential) -> WyzeAccount:
     """
     resp = requests.post(
         f"{WYZE_API}/user/get_user_info",
-        json=_get_payload(auth_info.access_token, auth_info.phone_id),
+        json=_get_payload(auth_info.token, auth_info.phone_id),
         headers=get_headers(),
     )
     resp_json = validate_resp(resp)
@@ -188,7 +217,7 @@ def get_homepage_object_list(auth_info: WyzeCredential) -> dict[str, Any]:
     """Get all homepage objects."""
     resp = requests.post(
         f"{WYZE_API}/v2/home_page/get_object_list",
-        json=_get_payload(auth_info.access_token, auth_info.phone_id),
+        json=_get_payload(auth_info.token, auth_info.phone_id),
         headers=get_headers(),
     )
     resp_json = validate_resp(resp)
@@ -199,6 +228,7 @@ def get_homepage_object_list(auth_info: WyzeCredential) -> dict[str, Any]:
 def get_camera_list(auth_info: WyzeCredential) -> list[WyzeCamera]:
     """Return a list of all cameras on the account."""
     data = get_homepage_object_list(auth_info)
+    print(data)
     result = []
     for device in data["device_list"]:  # type: dict[str, Any]
         if device["product_type"] != "Camera":
@@ -243,6 +273,7 @@ def get_camera_list(auth_info: WyzeCredential) -> list[WyzeCamera]:
                 parent_enr=parent_enr,
                 parent_mac=parent_mac,
                 thumbnail=thumbnail,
+                camera_info=None
             )
         )
     return result
@@ -321,9 +352,9 @@ def _get_payload(access_token: str, phone_id: str, req_path: str = "default"):
     return {
         "sc": SC_SV[req_path]["sc"],
         "sv": SC_SV[req_path]["sv"],
-        "app_ver": f"com.hualai.WyzeCam___{APP_VERSION}",
+        "app_ver": f"com.roku.ios.rokuhome___{APP_VERSION}",
         "app_version": APP_VERSION,
-        "app_name": "com.hualai.WyzeCam",
+        "app_name": "com.roku.ios.rokuhome",
         "phone_system_type": 1,
         "ts": int(time.time() * 1000),
         "access_token": access_token,

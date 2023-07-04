@@ -146,8 +146,6 @@ class WyzeApi:
             logger.error(f"⚠️ ERROR: {ex}")
         else:
             self.creds.login_req = False
-            if self.auth.mfa_options:
-                self._mfa_auth()
             return self.auth
 
     @cached

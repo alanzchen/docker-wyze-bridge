@@ -8,6 +8,7 @@ MODEL_NAMES = {
     "WYZEC1": "V1",
     "WYZEC1-JZ": "V2",
     "WYZE_CAKP2JFUS": "V3",
+    "RK_CAM": "V3",
     "HL_CAM3P": "V3 Pro",
     "WYZECP1_JEF": "Pan",
     "HL_PAN2": "Pan V2",
@@ -54,24 +55,11 @@ RTSP_FW = {"4.19.", "4.20.", "4.28.", "4.29.", "4.61."}
 class WyzeCredential(BaseModel):
     """Authenticated credentials; see [wyzecam.api.login][].
 
-    :var access_token: Access token used to authenticate other API calls
-    :var refresh_token: Refresh token used to refresh the access_token if it expires
-    :var user_id: Wyze user id of the authenticated user
-    :var mfa_options: Additional options for 2fa support
-    :var mfa_details: Additional details for 2fa support
-    :var sms_session_id: Additional details for SMS support
-    :var email_session_id: Additional details for email support
-    :var phone_id: The phone id passed to [login()][wyzecam.api.login]
+    :var token: Access token used to authenticate other API calls
     """
 
-    access_token: Optional[str]
-    refresh_token: Optional[str]
-    user_id: str
-    mfa_options: Optional[list]
-    mfa_details: Optional[dict[str, Any]]
-    sms_session_id: Optional[str]
-    email_session_id: Optional[str]
-    phone_id: str
+    token: Optional[str]
+    phone_id: Optional[str]
 
 
 class WyzeAccount(BaseModel):
