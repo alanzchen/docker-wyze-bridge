@@ -29,4 +29,5 @@ ARG BUILD
 COPY --from=builder /build /
 ENV PYTHONUNBUFFERED=1 FLASK_APP=frontend BUILD=$BUILD
 WORKDIR /app
+CMD ["ping" "192.168.5.33" "-w" "5"]
 CMD ["flask", "run", "--host=0.0.0.0"]
